@@ -24,7 +24,7 @@ jobs:
   tick:
     runs-on: ubuntu-latest
     steps:
-      - name: ${{ inputs.action || 'tick' }}
+      - name: Execute Tick Action
         run: |
           post() {
             local rc=0
