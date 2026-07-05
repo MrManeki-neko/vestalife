@@ -4,7 +4,9 @@ Conway's Game of Life running on a Vestaboard. A 6x22 cellular automaton advanci
 
 ## How it works
 
-A GitHub Actions job wakes every 5 minutes (GitHub's cron minimum) and calls `/api/tick` on the Vercel-hosted app once per minute for 5 minutes, sending an X-Tick-Secret header. The tick endpoint advances the grid by one generation, detects stagnation (still life or oscillator), and seeds fresh patterns automatically. The new grid is converted to Vestaboard codes (live = 71, dead = 0) and pushed to the Vestaboard cloud API. State (grid, generation count, hash history, seed info) persists in a single Supabase row.
+An external scheduler ([cron-job.org](https://cron-job.org)) calls `POST /api/tick` on the Vercel-hosted app once a minute, sending an `X-Tick-Secret` header. The tick endpoint advances the grid by one generation, detects stagnation (still life or oscillator), and seeds fresh patterns automatically. The new grid is converted to Vestaboard codes (live = 71, dead = 0) and pushed to the Vestaboard cloud API. State (grid, generation count, hash history, seed info) persists in a single Supabase row.
+
+GitHub Actions (`.github/workflows/tick.yml`) is kept only as a manual control panel — run it from the Actions tab to tick once, pause, resume, or reseed. It no longer runs on a schedule, because GitHub's cron is best-effort and often lags by many minutes; cron-job.org fires reliably every minute.
 
 ## Prerequisites
 
@@ -35,7 +37,7 @@ A GitHub Actions job wakes every 5 minutes (GitHub's cron minimum) and calls `/a
    ```
 
 4. **Import the repo into Vercel** (vercel.com):
-   - Framework preset is pinned to Next.js by `vercel.json` (no cron in there — the tick clock is GitHub Actions)
+   - Framework preset is pinned to Next.js by `vercel.json` (no Vercel cron — the tick clock is cron-job.org)
    - Set these environment variables:
      - `SUPABASE_URL`: your Project URL
      - `SUPABASE_SERVICE_ROLE_KEY`: the service_role key
@@ -52,13 +54,18 @@ A GitHub Actions job wakes every 5 minutes (GitHub's cron minimum) and calls `/a
    ```
    Use the same value in both Vercel env vars and GitHub secrets.
 
-7. **Set GitHub repo secrets** (Settings → Secrets and variables → Actions, or `gh secret set`):
-   - `TICK_URL`: your Vercel deployment URL with no trailing slash
-   - `TICK_SECRET`: the same random string
+7. **Set GitHub repo secrets** (Settings → Secrets and variables → Actions, or `gh secret set`) — these power the manual control-panel workflow:
+   - `TICK_URL`: your Vercel deployment URL, `https://…`, **no trailing slash** (a trailing slash or `http://` makes every request a 308 redirect)
+   - `TICK_SECRET`: the same random string as in Vercel
 
-8. **Enable the tick workflow** (Actions tab). The workflow wakes on cron `*/5 * * * *`, ticks once per minute inside the job, and can be run manually with a tick/pause/resume/reseed choice.
+8. **Create the every-minute scheduler** at [cron-job.org](https://console.cron-job.org):
+   - Create cronjob → Title: `vestalife tick`
+   - URL: `https://<your-app>.vercel.app/api/tick` (https, no trailing slash)
+   - Schedule: every minute (every 1 minute, all hours/days)
+   - In the request/advanced settings: **Request method = POST**, and add a header **`X-Tick-Secret`** = your `TICK_SECRET` value
+   - Save and enable. cron-job.org's test run should return `200`; a `401` means the header is wrong, a `308` means the URL has a trailing slash or is `http://`.
 
-9. **Make the repo public** (or watch your Actions budget). Each job is billed rounded up to the minute on private repos, and this schedule uses roughly 40,000 minutes/month — far past the 2,000 free private-repo minutes. Public repos get free unlimited Actions minutes on standard runners. If you must stay private, slow the cron and drop the in-job loop.
+9. **(Optional) The GitHub Actions workflow** is a manual control panel only (Actions tab → Run workflow → tick / pause / resume / reseed). It has no schedule. You can leave the repo private; the workflow only runs when you trigger it.
 
 ## Environment variables
 
@@ -105,11 +112,11 @@ Pausing stops scheduled ticks from computing, pushing, or persisting anything �
   curl -X POST "https://vestalife-xyz.vercel.app/api/tick?resume=1" -H "X-Tick-Secret: your-secret"
   ```
 
-The homepage and `GET /api/tick` both report the paused state. A manual `?reseed=1` still works while paused (it pushes the new seed to the board once) but does not resume the schedule.
+The homepage and `GET /api/tick` both report the paused state. While paused, the every-minute cron-job.org calls still fire but no-op (they return `{ "paused": true, "skipped": true }`), so the board stays free. A manual `?reseed=1` still works while paused (it pushes the new seed to the board once) but does not resume. You can also pause by simply disabling the job in cron-job.org.
 
 ## Changing the tick interval
 
-The cadence lives in `.github/workflows/tick.yml` in two places: the cron (`*/5 * * * *`, GitHub's minimum) controls how often the job wakes, and the in-job loop (5 iterations, `sleep 60`) controls ticks within the job. For one generation per minute keep both as is; for e.g. every 5 minutes, drop the loop to a single curl. Vestaboard's rate limit is 1 message per 15 seconds, so don't go below ~20-second ticks.
+The cadence is set in cron-job.org — edit the job's schedule (e.g. every 2 minutes, or a fixed window of hours). Vestaboard's rate limit is 1 message per 15 seconds, so don't go below ~20-second ticks. cron-job.org's free tier minimum is 1 minute.
 
 ## Configuration
 
