@@ -27,10 +27,16 @@ jobs:
       - name: Execute Tick Action
         run: |
           post() {
-            local rc=0
-            curl -fsS -X POST "$TICK_URL/api/tick$1" -H "X-Tick-Secret: $TICK_SECRET" || rc=$?
-            echo
-            return $rc
+            local base code
+            # Normalize the URL so a stray trailing slash or http:// can't
+            # turn every request into a 308 redirect.
+            base=$(printf '%s' "$TICK_URL" | sed -e 's#^http:#https:#' -e 's#/*$##')
+            code=$(curl -sS -o /tmp/tick_body -w '%{http_code}' \
+              -X POST "$base/api/tick$1" -H "X-Tick-Secret: $TICK_SECRET")
+            echo "HTTP $code: $(cat /tmp/tick_body)"
+            # Only 2xx is success. A 3xx redirect (malformed URL) or 4xx/5xx
+            # must fail loudly rather than pass silently as it did before.
+            [ "${code#2}" != "$code" ]
           }
           case "$ACTION" in
             pause)  post "?pause=1" ;;
