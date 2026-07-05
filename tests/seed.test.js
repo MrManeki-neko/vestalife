@@ -47,7 +47,9 @@ describe("seed", () => {
         let callCount = 0;
         return () => {
           callCount++;
-          if (callCount === 1) return 1 / 8; // pick "blinker" (second pattern)
+          // CHOICES has 7 entries (6 patterns + "soup"); index 1 = "blinker".
+          // (1 + 0.5) / 7 * 7 = 1.5 -> floor -> 1.
+          if (callCount === 1) return 1.5 / 7;
           if (callCount === 2) return 0.5; // offsetRow
           if (callCount === 3) return 0.5; // offsetCol
           return Math.random();
@@ -64,7 +66,8 @@ describe("seed", () => {
         let callCount = 0;
         return () => {
           callCount++;
-          if (callCount === 1) return 2 / 8; // pick "toad" (third pattern)
+          // CHOICES has 7 entries; index 2 = "toad". (2 + 0.5) / 7 selects it.
+          if (callCount === 1) return 2.5 / 7;
           if (callCount === 2) return 0.5; // offsetRow
           if (callCount === 3) return 0.5; // offsetCol
           return Math.random();
@@ -79,7 +82,7 @@ describe("seed", () => {
 
   describe("soup seeding with deterministic rng", () => {
     it("soup choice returns pattern='soup' and offset=null", () => {
-      // Pick soup: CHOICES.length = 8, so values >= 7/8 pick "soup"
+      // Pick soup: CHOICES.length = 7, so values >= 6/7 pick "soup" (0.99*7=6.93)
       const mockRng = (() => {
         let callCount = 0;
         return () => {
@@ -130,14 +133,31 @@ describe("seed", () => {
     });
 
     it("soup density between 10% and 50% with typical rng", () => {
-      // Use a seeded rng that produces a realistic distribution
-      let seed_val = 12345;
+      // mulberry32: a real uniform deterministic PRNG (sin-hack rngs skew badly).
+      function mulberry32(a) {
+        return function () {
+          a |= 0;
+          a = (a + 0x6d2b79f5) | 0;
+          let t = Math.imul(a ^ (a >>> 15), 1 | a);
+          t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+          return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
+      }
+
+      // First call must select "soup" (index 6 of 7 choices); remaining calls
+      // drive the 132 cell rolls at density 0.3.
+      const uniform = mulberry32(12345);
+      let first = true;
       const mockRng = () => {
-        const x = Math.sin(seed_val++) * 10000;
-        return x - Math.floor(x);
+        if (first) {
+          first = false;
+          return 6.5 / 7;
+        }
+        return uniform();
       };
 
       const result = seed(6, 22, mockRng);
+      expect(result.pattern).toBe("soup");
       const live = countLive(result.grid);
       const total = 6 * 22;
       const density = live / total;
