@@ -35,7 +35,7 @@ GitHub Actions calls `/api/tick` on the Vercel-hosted app every 10 minutes via c
    ```
 
 4. **Import the repo into Vercel** (vercel.com):
-   - Framework: Next.js, no special settings
+   - Framework preset is pinned to Next.js by `vercel.json` (no cron in there — the tick clock is GitHub Actions)
    - Set these environment variables:
      - `SUPABASE_URL`: your Project URL
      - `SUPABASE_SERVICE_ROLE_KEY`: the service_role key
