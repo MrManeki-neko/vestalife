@@ -76,6 +76,11 @@ function Board({ doc }) {
         </div>
         <div>{seedLabel}</div>
         <div>updated {doc.updatedAt}</div>
+        {Boolean(doc.paused) && (
+          <div style={{ color: "#dc3" }}>
+            paused &mdash; board is free for normal messages
+          </div>
+        )}
         {doc.lastPushOk === false && (
           <div style={{ color: "#c66" }}>last Vestaboard push failed</div>
         )}

@@ -306,6 +306,7 @@ describe("POST /api/tick", () => {
     expect(doc).toHaveProperty("grid");
     expect(doc).toHaveProperty("hashHistory");
     expect(doc).toHaveProperty("seed");
+    expect(doc).toHaveProperty("paused", false); // bootstrap docs are unpaused
     expect(doc).toHaveProperty("lastPushOk");
     expect(doc).toHaveProperty("updatedAt");
 
@@ -313,10 +314,196 @@ describe("POST /api/tick", () => {
     expect(Array.isArray(doc.hashHistory)).toBe(true);
     expect(Array.isArray(doc.grid)).toBe(true);
   });
+
+  describe("pause / resume", () => {
+    function pausedableDoc(overrides = {}) {
+      return {
+        version: 1,
+        generation: 9,
+        grid: gliderGrid(),
+        hashHistory: ["dummy-hash-a", "dummy-hash-b"],
+        seed: { pattern: "glider", offset: [1, 8], seededAtGen: 0 },
+        paused: false,
+        lastPushOk: true,
+        updatedAt: "2025-06-01T00:00:00.000Z",
+        ...overrides,
+      };
+    }
+
+    it("?pause=1 with no stored doc returns warning and does not persist", async () => {
+      mocks.get.mockResolvedValue(null);
+
+      const response = await POST(
+        makeRequest({ "X-Tick-Secret": "test-secret" }, "?pause=1")
+      );
+      const data = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(data.ok).toBe(true);
+      expect(data.paused).toBe(false);
+      expect(data.warning).toBe("no state to pause");
+      expect(mocks.put).not.toHaveBeenCalled();
+      expect(mocks.push).not.toHaveBeenCalled();
+    });
+
+    it("?pause=1 with existing doc persists paused=true without ticking or pushing", async () => {
+      const existingDoc = pausedableDoc();
+      mocks.get.mockResolvedValue(existingDoc);
+
+      const response = await POST(
+        makeRequest({ "X-Tick-Secret": "test-secret" }, "?pause=1")
+      );
+      const data = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(data.ok).toBe(true);
+      expect(data.paused).toBe(true);
+      expect(data.generation).toBe(9); // unchanged
+
+      expect(mocks.push).not.toHaveBeenCalled();
+      expect(mocks.put).toHaveBeenCalledOnce();
+      const storedDoc = mocks.put.mock.calls[0][0];
+      expect(storedDoc.paused).toBe(true);
+      // Everything except paused/updatedAt is byte-identical to the stored doc.
+      expect(storedDoc.generation).toBe(existingDoc.generation);
+      expect(storedDoc.grid).toEqual(existingDoc.grid);
+      expect(storedDoc.hashHistory).toEqual(existingDoc.hashHistory);
+      expect(storedDoc.seed).toEqual(existingDoc.seed);
+      expect(storedDoc.lastPushOk).toBe(existingDoc.lastPushOk);
+      // updatedAt is refreshed.
+      expect(storedDoc.updatedAt).not.toBe(existingDoc.updatedAt);
+      expect(typeof storedDoc.updatedAt).toBe("string");
+    });
+
+    it("?resume=1 with no stored doc returns warning and does not persist", async () => {
+      mocks.get.mockResolvedValue(null);
+
+      const response = await POST(
+        makeRequest({ "X-Tick-Secret": "test-secret" }, "?resume=1")
+      );
+      const data = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(data.ok).toBe(true);
+      expect(data.paused).toBe(false);
+      expect(data.warning).toBe("no state to resume");
+      expect(mocks.put).not.toHaveBeenCalled();
+      expect(mocks.push).not.toHaveBeenCalled();
+    });
+
+    it("?resume=1 with paused doc persists paused=false without ticking or pushing", async () => {
+      const existingDoc = pausedableDoc({ paused: true });
+      mocks.get.mockResolvedValue(existingDoc);
+
+      const response = await POST(
+        makeRequest({ "X-Tick-Secret": "test-secret" }, "?resume=1")
+      );
+      const data = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(data.ok).toBe(true);
+      expect(data.paused).toBe(false);
+      expect(data.generation).toBe(9); // unchanged
+
+      expect(mocks.push).not.toHaveBeenCalled();
+      expect(mocks.put).toHaveBeenCalledOnce();
+      const storedDoc = mocks.put.mock.calls[0][0];
+      expect(storedDoc.paused).toBe(false);
+      expect(storedDoc.generation).toBe(existingDoc.generation);
+      expect(storedDoc.grid).toEqual(existingDoc.grid);
+      expect(storedDoc.hashHistory).toEqual(existingDoc.hashHistory);
+      expect(storedDoc.seed).toEqual(existingDoc.seed);
+    });
+
+    it("normal tick with paused doc is skipped: no step, no push, no put", async () => {
+      const existingDoc = pausedableDoc({ paused: true });
+      mocks.get.mockResolvedValue(existingDoc);
+
+      const response = await POST(
+        makeRequest({ "X-Tick-Secret": "test-secret" })
+      );
+      const data = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(data.ok).toBe(true);
+      expect(data.paused).toBe(true);
+      expect(data.skipped).toBe(true);
+      expect(data.generation).toBe(9); // unchanged
+
+      expect(mocks.push).not.toHaveBeenCalled();
+      expect(mocks.put).not.toHaveBeenCalled();
+    });
+
+    it("?reseed=1 works while paused and preserves paused=true", async () => {
+      const existingDoc = pausedableDoc({ paused: true });
+      mocks.get.mockResolvedValue(existingDoc);
+
+      const response = await POST(
+        makeRequest({ "X-Tick-Secret": "test-secret" }, "?reseed=1")
+      );
+      const data = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(data.ok).toBe(true);
+      expect(data.reseeded).toBe(true);
+      expect(data.generation).toBe(10); // incremented
+
+      expect(mocks.push).toHaveBeenCalledOnce();
+      expect(mocks.put).toHaveBeenCalledOnce();
+      const storedDoc = mocks.put.mock.calls[0][0];
+      expect(storedDoc.paused).toBe(true); // pause state preserved
+      expect(storedDoc.generation).toBe(10);
+    });
+
+    it("?pause=1&reseed=1: pause wins over reseed", async () => {
+      const existingDoc = pausedableDoc();
+      mocks.get.mockResolvedValue(existingDoc);
+
+      const response = await POST(
+        makeRequest({ "X-Tick-Secret": "test-secret" }, "?pause=1&reseed=1")
+      );
+      const data = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(data.ok).toBe(true);
+      expect(data.paused).toBe(true);
+      expect(data.generation).toBe(9); // unchanged: no reseed happened
+      expect(data.reseeded).toBeUndefined();
+
+      expect(mocks.push).not.toHaveBeenCalled();
+      expect(mocks.put).toHaveBeenCalledOnce();
+      const storedDoc = mocks.put.mock.calls[0][0];
+      expect(storedDoc.generation).toBe(9);
+      expect(storedDoc.grid).toEqual(existingDoc.grid);
+    });
+
+    it("legacy doc without a paused field ticks normally and gains paused=false", async () => {
+      const legacyDoc = pausedableDoc();
+      delete legacyDoc.paused; // legacy docs predate the pause feature
+
+      mocks.get.mockResolvedValue(legacyDoc);
+
+      const response = await POST(
+        makeRequest({ "X-Tick-Secret": "test-secret" })
+      );
+      const data = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(data.ok).toBe(true);
+      expect(data.reseeded).toBe(false); // glider evolves normally
+      expect(data.generation).toBe(10);
+      expect(data.skipped).toBeUndefined();
+
+      expect(mocks.push).toHaveBeenCalledOnce();
+      expect(mocks.put).toHaveBeenCalledOnce();
+      const storedDoc = mocks.put.mock.calls[0][0];
+      expect(storedDoc.paused).toBe(false); // persisted docs always carry paused
+    });
+  });
 });
 
 describe("GET /api/tick", () => {
-  it("returns all nulls when no document exists", async () => {
+  it("returns all nulls and paused=false when no document exists", async () => {
     mocks.get.mockResolvedValue(null);
 
     const response = await GET();
@@ -326,6 +513,7 @@ describe("GET /api/tick", () => {
       generation: null,
       liveCells: null,
       seed: null,
+      paused: false,
       updatedAt: null,
     });
   });
@@ -362,7 +550,7 @@ describe("GET /api/tick", () => {
     expect(data.updatedAt).toBe("2025-01-15T10:30:00Z");
   });
 
-  it("returns safe defaults on store error", async () => {
+  it("returns safe defaults with paused=false on store error", async () => {
     mocks.get.mockRejectedValue(new Error("Store failed"));
 
     const response = await GET();
@@ -372,7 +560,49 @@ describe("GET /api/tick", () => {
       generation: null,
       liveCells: null,
       seed: null,
+      paused: false,
       updatedAt: null,
     });
+  });
+
+  it("returns paused=true when the stored doc is paused", async () => {
+    const existingDoc = {
+      version: 1,
+      generation: 4,
+      grid: gliderGrid(),
+      hashHistory: ["hash1"],
+      seed: { pattern: "glider", offset: [1, 8], seededAtGen: 0 },
+      paused: true,
+      lastPushOk: true,
+      updatedAt: "2025-01-15T10:30:00Z",
+    };
+
+    mocks.get.mockResolvedValue(existingDoc);
+
+    const response = await GET();
+    const data = await response.json();
+
+    expect(data.paused).toBe(true);
+    expect(data.generation).toBe(4);
+  });
+
+  it("Boolean-coerces paused from legacy docs without the field", async () => {
+    const existingDoc = {
+      version: 1,
+      generation: 2,
+      grid: gliderGrid(),
+      hashHistory: ["hash1"],
+      seed: { pattern: "glider", offset: [1, 8], seededAtGen: 0 },
+      lastPushOk: true,
+      updatedAt: "2025-01-15T10:30:00Z",
+      // no paused field (legacy doc)
+    };
+
+    mocks.get.mockResolvedValue(existingDoc);
+
+    const response = await GET();
+    const data = await response.json();
+
+    expect(data.paused).toBe(false);
   });
 });

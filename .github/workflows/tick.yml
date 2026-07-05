@@ -2,17 +2,52 @@ name: tick
 
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "*/5 * * * *"
   workflow_dispatch:
+    inputs:
+      action:
+        description: "What to do"
+        type: choice
+        default: tick
+        options:
+          - tick
+          - pause
+          - resume
+          - reseed
+
+# Never let two tick jobs overlap (each job spans ~4 minutes of curls).
+concurrency:
+  group: tick
+  cancel-in-progress: false
 
 jobs:
   tick:
     runs-on: ubuntu-latest
     steps:
-      - name: Advance one generation
+      - name: ${{ inputs.action || 'tick' }}
         run: |
-          curl -fsS -X POST "$TICK_URL/api/tick" \
-            -H "X-Tick-Secret: $TICK_SECRET"
+          post() {
+            local rc=0
+            curl -fsS -X POST "$TICK_URL/api/tick$1" -H "X-Tick-Secret: $TICK_SECRET" || rc=$?
+            echo
+            return $rc
+          }
+          case "$ACTION" in
+            pause)  post "?pause=1" ;;
+            resume) post "?resume=1" ;;
+            reseed) post "?reseed=1" ;;
+            *)
+              # GitHub cron minimum is 5 minutes; curl once per minute inside
+              # the job to get 1-minute generations.
+              fails=0
+              for i in 1 2 3 4 5; do
+                post || { echo "tick $i failed"; fails=$((fails+1)); }
+                if [ "$i" -lt 5 ]; then sleep 60; fi
+              done
+              [ "$fails" -lt 5 ] || exit 1
+              ;;
+          esac
         env:
           TICK_URL: ${{ secrets.TICK_URL }}
           TICK_SECRET: ${{ secrets.TICK_SECRET }}
+          ACTION: ${{ inputs.action || 'tick' }}

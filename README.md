@@ -1,10 +1,10 @@
 # Vestalife
 
-Conway's Game of Life running on a Vestaboard. A 6x22 cellular automaton on a 10-minute cycle, with automatic reseeding on extinction or stagnation.
+Conway's Game of Life running on a Vestaboard. A 6x22 cellular automaton advancing one generation per minute, with automatic reseeding on extinction or stagnation, and a pause switch so the board can show normal messages.
 
 ## How it works
 
-GitHub Actions calls `/api/tick` on the Vercel-hosted app every 10 minutes via cron, sending an X-Tick-Secret header. The tick endpoint advances the grid by one generation, detects stagnation (still life or oscillator), and seeds fresh patterns automatically. The new grid is converted to Vestaboard codes (live = 71, dead = 0) and pushed to the Vestaboard cloud API. State (grid, generation count, hash history, seed info) persists in a single Supabase row.
+A GitHub Actions job wakes every 5 minutes (GitHub's cron minimum) and calls `/api/tick` on the Vercel-hosted app once per minute for 5 minutes, sending an X-Tick-Secret header. The tick endpoint advances the grid by one generation, detects stagnation (still life or oscillator), and seeds fresh patterns automatically. The new grid is converted to Vestaboard codes (live = 71, dead = 0) and pushed to the Vestaboard cloud API. State (grid, generation count, hash history, seed info) persists in a single Supabase row.
 
 ## Prerequisites
 
@@ -56,7 +56,9 @@ GitHub Actions calls `/api/tick` on the Vercel-hosted app every 10 minutes via c
    - `TICK_URL`: your Vercel deployment URL with no trailing slash
    - `TICK_SECRET`: the same random string
 
-8. **Enable the tick workflow** (Actions tab). The workflow runs on cron `*/10 * * * *` and on manual trigger.
+8. **Enable the tick workflow** (Actions tab). The workflow wakes on cron `*/5 * * * *`, ticks once per minute inside the job, and can be run manually with a tick/pause/resume/reseed choice.
+
+9. **Make the repo public** (or watch your Actions budget). Each job is billed rounded up to the minute on private repos, and this schedule uses roughly 40,000 minutes/month — far past the 2,000 free private-repo minutes. Public repos get free unlimited Actions minutes on standard runners. If you must stay private, slow the cron and drop the in-job loop.
 
 ## Environment variables
 
@@ -92,11 +94,22 @@ View the board in a browser:
 https://vestalife-xyz.vercel.app/
 ```
 
+## Pausing (show normal messages on the board)
+
+Pausing stops scheduled ticks from computing, pushing, or persisting anything — the board is all yours until you resume, and the simulation freezes in place.
+
+- From GitHub: Actions tab → tick → Run workflow → choose `pause` (or `resume`).
+- From a terminal:
+  ```bash
+  curl -X POST "https://vestalife-xyz.vercel.app/api/tick?pause=1" -H "X-Tick-Secret: your-secret"
+  curl -X POST "https://vestalife-xyz.vercel.app/api/tick?resume=1" -H "X-Tick-Secret: your-secret"
+  ```
+
+The homepage and `GET /api/tick` both report the paused state. A manual `?reseed=1` still works while paused (it pushes the new seed to the board once) but does not resume the schedule.
+
 ## Changing the tick interval
 
-Edit `.github/workflows/tick.yml` and change the cron schedule. GitHub Actions minimum is 5 minutes. Vestaboard's rate limit is 1 message per 15 seconds, so anything ≥5 minutes is safe.
-
-Example: `*/5 * * * *` for every 5 minutes.
+The cadence lives in `.github/workflows/tick.yml` in two places: the cron (`*/5 * * * *`, GitHub's minimum) controls how often the job wakes, and the in-job loop (5 iterations, `sleep 60`) controls ticks within the job. For one generation per minute keep both as is; for e.g. every 5 minutes, drop the loop to a single curl. Vestaboard's rate limit is 1 message per 15 seconds, so don't go below ~20-second ticks.
 
 ## Configuration
 

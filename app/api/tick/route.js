@@ -37,7 +37,43 @@ export async function POST(request) {
   const current = await store.get();
 
   const url = new URL(request.url);
+  const wantPause = url.searchParams.get("pause") === "1";
+  const wantResume = url.searchParams.get("resume") === "1";
   const forceReseed = url.searchParams.get("reseed") === "1";
+
+  // Precedence: pause > resume > reseed > normal tick.
+  if (wantPause || wantResume) {
+    const targetPaused = wantPause;
+    if (!current) {
+      return Response.json(
+        {
+          ok: true,
+          paused: false,
+          warning: targetPaused ? "no state to pause" : "no state to resume",
+        },
+        { status: 200 }
+      );
+    }
+    const doc = {
+      ...current,
+      paused: targetPaused,
+      updatedAt: new Date().toISOString(),
+    };
+    await store.put(doc);
+    return Response.json(
+      { ok: true, paused: targetPaused, generation: current.generation },
+      { status: 200 }
+    );
+  }
+
+  if (current && Boolean(current.paused) && !forceReseed) {
+    return Response.json(
+      { ok: true, paused: true, skipped: true, generation: current.generation },
+      { status: 200 }
+    );
+  }
+
+  const paused = current ? Boolean(current.paused) : false;
 
   let nextGrid;
   let hashHistory;
@@ -104,6 +140,7 @@ export async function POST(request) {
     grid: nextGrid,
     hashHistory,
     seed: seedInfo,
+    paused,
     lastPushOk: pushOk,
     updatedAt: new Date().toISOString(),
   };
@@ -123,17 +160,18 @@ export async function GET() {
     const store = createStore();
     doc = await store.get();
   } catch (err) {
-    return Response.json({ generation: null, liveCells: null, seed: null, updatedAt: null });
+    return Response.json({ generation: null, liveCells: null, seed: null, paused: false, updatedAt: null });
   }
 
   if (!doc) {
-    return Response.json({ generation: null, liveCells: null, seed: null, updatedAt: null });
+    return Response.json({ generation: null, liveCells: null, seed: null, paused: false, updatedAt: null });
   }
 
   return Response.json({
     generation: doc.generation,
     liveCells: countLive(doc.grid),
     seed: doc.seed,
+    paused: Boolean(doc.paused),
     updatedAt: doc.updatedAt,
   });
 }
