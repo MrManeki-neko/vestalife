@@ -71,11 +71,15 @@ GitHub Actions (`.github/workflows/tick.yml`) is kept only as a manual control p
 
 | Name | Where | Purpose |
 |------|-------|---------|
-| `TICK_SECRET` | Vercel + GitHub secret | Shared secret between Actions and `/api/tick` (timing-safe comparison) |
+| `TICK_SECRET` | Vercel | Authentication secret for `/api/tick` (sent by cron-job.org in `X-Tick-Secret` header) |
 | `VESTABOARD_API_TOKEN` | Vercel | Vestaboard cloud API token |
 | `SUPABASE_URL` | Vercel | Supabase project URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | Vercel | Supabase service role key (server-side only) |
 | `WRAP_EDGES` | Vercel (optional) | Boolean; default `true` (toroidal edges). Set to `false` for hard edges. |
+
+**GitHub secrets** (for the manual control-panel workflow only):
+- `TICK_URL`: Your Vercel app URL (`https://…`), no trailing slash — must match the URL in cron-job.org
+- `TICK_SECRET`: Same value as Vercel's `TICK_SECRET`
 
 ## Manual testing
 
@@ -137,10 +141,12 @@ Seeding picks randomly from: glider, blinker, toad, beacon, LWSS, r-pentomino, o
 
 ## Design notes
 
-**Why GitHub Actions instead of Vercel Cron?** Vercel Hobby tier limits cron to once daily. GitHub Actions is free and precise enough.
+**Why cron-job.org for the clock?** Vercel Hobby tier limits cron to once daily. GitHub Actions scheduled workflows are best-effort and often lag significantly (gaps of 80+ minutes observed). cron-job.org's free tier fires reliably every minute and requires no local infrastructure.
 
 **Why Supabase?** Serverless functions are stateless. A single JSONB row in Postgres is a lightweight, free state store. Supabase RLS with no policies means only the service role key (used server-side) can access it.
 
 **Stagnation & reseed:** After every step, we check for extinction, still life (same hash as previous generation), or oscillator (hash in the last 12 hashes). If any is true, the board reseeds with a random pattern at a random offset. This keeps the sim always alive.
 
 **Vestaboard push failures:** If the push to Vestaboard fails, we log and set a warning in the response, but the tick still succeeds and state still advances. The board's state is the source of truth; Vestaboard reflects it when the network allows.
+
+**URL normalization:** cron-job.org's test request must return HTTP 200. A trailing slash in the URL or `http://` protocol causes a 308 redirect, which silently freezes the board (seen in production). The `/api/tick` endpoint normalizes all URLs before processing.
